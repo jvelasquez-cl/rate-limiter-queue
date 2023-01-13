@@ -1,6 +1,12 @@
 class TimeOutError extends Error {
-  constructor(args) {
-    super(args);
+  constructor(message) {
+    super(message);
+  }
+}
+
+class QueueMaxSizeError extends Error {
+  constructor(message) {
+    super(message);
   }
 }
 
@@ -19,4 +25,9 @@ async function timeOutPromise(time, promise) {
   return Promise.race([timer, promise]);
 }
 
-module.exports = { delay, timeOutPromise, TimeOutError };
+module.exports = {
+  delay,
+  timeOutPromise,
+  TimeOutError,
+  QueueMaxSizeError,
+};

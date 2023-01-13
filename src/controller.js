@@ -1,7 +1,8 @@
 const { delay } = require('./utils');
 
 const root = async (req, res) => {
-  await delay(1000 * 3);
+  console.log('Controller', req.id);
+  await delay(3000);
   return res.status(200).json({});
 };
 
