@@ -1,4 +1,9 @@
-const { QueueMaxSizeError, timeOutPromise, delay } = require('./utils');
+const {
+  QueueMaxSizeError,
+  timeOutPromise,
+  delay,
+  TimeOutError,
+} = require('./utils');
 
 /*
   TODO:
@@ -26,8 +31,9 @@ class Limiter {
 
         // Ask if the request can be handled and reject when timeOut
         console.log('Queued');
-        await timeOutPromise(3000, this.checkIfCanHandle(requestId));
-        // await this.checkIfCanHandle(requestId);
+        // await timeOutPromise(3000, this.checkIfCanHandle(requestId));
+
+        return this.checkIfCanHandle(requestId);
       } else {
         // if the queue is full return 429
         throw new QueueMaxSizeError('Queue size reached');
@@ -36,6 +42,11 @@ class Limiter {
 
     // if no limit reached then push to the set and resolve inmediatly
     await this.pushToSet(requestId);
+  }
+
+  free(requestId) {
+    this.removeFromLocalQueue(requestId);
+    return this.removeFromSet(requestId);
   }
 
   getNumberOfRequestRunning() {
@@ -62,21 +73,30 @@ class Limiter {
     this.localQueue.delete(requestId);
   }
 
-  async checkIfCanHandle(requestId) {
-    while (true) {
-      // TODO: check how to out the loop after x time to avoid a memory leak
+  checkIfCanHandle(requestId) {
+    return new Promise((resolve, reject) => {
+      const intervalId = setInterval(() => {
+        (async () => {
+          try {
+            const numberOfRequests = await this.getNumberOfRequestRunning();
+            if (numberOfRequests < this.requestAmount) {
+              this.removeFromLocalQueue(requestId);
+              await this.pushToSet(requestId);
+              return resolve(requestId);
+            }
+          } catch (error) {
+            return reject(error);
+          }
+        })();
+      }, 200);
 
-      // If the set has space the push to the set the request and remove it from the queue
-      const numberOfRequests = await this.getNumberOfRequestRunning();
-      console.log({ numberOfRequests });
-      if (numberOfRequests < this.requestAmount) {
-        this.removeFromLocalQueue(requestId);
-        await this.pushToSet(requestId);
-
-        return true;
-      }
-      await delay(200);
-    }
+      setTimeout(() => {
+        clearInterval(intervalId);
+        return reject(
+          new TimeOutError('Request timedout waiting in the queue')
+        );
+      }, 1000);
+    });
   }
 }
 

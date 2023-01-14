@@ -1,7 +1,7 @@
 const { nanoid } = require('nanoid');
 const { connect } = require('./redis');
 const { TimeOutError, QueueMaxSizeError, timeOutPromise } = require('./utils');
-const { Limiter } = require('./rateLimiter');
+const { Limiter } = require('./RateLimiter');
 
 const requestAmount = 1;
 const maxQueueSize = 1;
@@ -31,8 +31,7 @@ const limiter = async (req, res, next) => {
 
     res.on('finish', async () => {
       try {
-        await limiterInstance.removeFromSet(requestId);
-        limiterInstance.removeFromLocalQueue();
+        await limiterInstance.free(requestId);
       } catch (error) {
         console.log(error);
       } finally {
@@ -43,9 +42,12 @@ const limiter = async (req, res, next) => {
 
     return next();
   } catch (error) {
-    console.log(error);
     if (error instanceof QueueMaxSizeError) {
       return res.status(429).send(error);
+    }
+
+    if (error instanceof TimeOutError) {
+      return res.status(504).send(error);
     }
 
     return res.status(500).send(error);
