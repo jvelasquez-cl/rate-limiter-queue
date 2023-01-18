@@ -24,32 +24,33 @@ class QueueMaxSizeError extends Error {
 }
 
 class Limiter {
-  constructor({ baseKey, requestAmount, maxQueueSize, redisClient }) {
-    this.baseKey = baseKey;
+  constructor({
+    prefixKey,
+    requestAmount,
+    maxQueueSize,
+    redisClient,
+    maxWaitingTimeInQueue = 1000 * 60 * 3, // 3 Minutes
+    pollingInterval = 1000, // Every second
+    expirationTimeSetItems = 1000 * 60 * 10, // 10 Minutes
+    expirationCheckInterval = 1000 * 60 * 5, // 5 Minutes
+  }) {
+    this.prefixKey = prefixKey;
     this.requestAmount = requestAmount;
     this.maxQueueSize = maxQueueSize;
     this.redisClient = redisClient;
     this.localQueue = new Map();
-    this.requestSetKey = `${baseKey}:requests`;
-
-    // If defineCommand is defined then register the lua function
-    if (typeof redisClient.defineCommand === 'function') {
-      this.redisClient.defineCommand('limiterExpireOldRequest', {
-        numberOfKeys: 1,
-        lua: expireOldRequestLuaScript,
-      });
-    }
+    this.requestSetKey = `${prefixKey}:requests`;
+    this.maxWaitingTimeInQueue = maxWaitingTimeInQueue;
+    this.pollingInterval = pollingInterval;
+    this.expirationTimeSetItems = expirationTimeSetItems;
+    this.expirationCheckInterval = expirationCheckInterval;
+    this.nextExpirationCall = Date.now() + expirationCheckInterval;
   }
 
   async handle(requestId) {
+    await this.expireOldItemsInSet();
     const numberOfRequests = await this.getNumberOfRequestRunning();
 
-    // TODO: Define when to run the script to expire
-    // const [removed, current] = await this.redisClient.evalAsync(
-    //   expireOldRequestLuaScript,
-    //   1,
-    //   this.requestSetKey
-    // );
     if (numberOfRequests > this.requestAmount) {
       if (this.localQueue.size < this.maxQueueSize) {
         // if the set is full push to the queue and start a timeout
@@ -84,7 +85,7 @@ class Limiter {
     console.log('Added', requestId);
     return this.redisClient.zaddAsync(
       this.requestSetKey,
-      Date.now(),
+      Date.now() + this.expirationTimeSetItems,
       requestId
     );
   }
@@ -119,16 +120,37 @@ class Limiter {
             return reject(error);
           }
         })();
-      }, 1000);
+      }, this.pollingInterval);
 
       setTimeout(() => {
         clearInterval(intervalId);
         return reject(
           new TimeOutError('Request timedout waiting in the queue')
         );
-      }, 1000 * 60 * 3);
+      }, this.maxWaitingTimeInQueue);
     });
+  }
+
+  expireOldItemsInSet() {
+    if (Date.now() >= this.nextExpirationCall) {
+      this.nextExpirationCall = Date.now() + this.expirationCheckInterval;
+      return expireOldRequests(this.redisClient, `${this.prefixKey}:requests`);
+    }
+    return;
   }
 }
 
-module.exports = { Limiter, TimeOutError, QueueMaxSizeError };
+const expireOldRequests = (redisClient, prefixKey) => {
+  return redisClient.evalAsync(
+    expireOldRequestLuaScript,
+    1,
+    `${prefixKey}:requests`
+  );
+};
+
+module.exports = {
+  Limiter,
+  TimeOutError,
+  QueueMaxSizeError,
+  expireOldRequests,
+};

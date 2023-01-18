@@ -1,11 +1,12 @@
 const { Router } = require('express');
 const { root } = require('./controller');
-// const { limiter } = require('./queue-limit.middleware');
-const { limiter } = require('./concurrency-limit.middleware');
+const {
+  ConcurrencyLimiter,
+} = require('./ConcurrencyLimiter/ConcurrencyLimiter.middleware');
 
 const router = new Router();
 
-router.use(limiter);
+router.use(ConcurrencyLimiter);
 
 router.get('/', root);
 
