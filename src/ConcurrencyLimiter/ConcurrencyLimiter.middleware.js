@@ -1,4 +1,5 @@
 const { nanoid } = require('nanoid');
+const logger = require('@condor-labs/logger');
 const { connect } = require('../libs/redis');
 const { Limiter, TimeOutError, QueueMaxSizeError } = require('./RateLimiter');
 
@@ -7,13 +8,12 @@ const maxQueueSize = 20;
 let limiterInstance;
 
 const ConcurrencyLimiter = async (req, res, next) => {
-  // const requestId = nanoid();
   let requestId;
 
   const prefixKey = `limiter`;
   try {
     const redis = await connect();
-    // This can throw if reach the limit. The limit is a trillion, but aja. I think using nanoid is better idea.
+    // This can throw if reach the limit. The limit is a trillion, but aja. nanoid could be a better option.
     requestId = await redis.incrAsync(`${prefixKey}:counter`);
     req.id = requestId;
 
@@ -23,6 +23,8 @@ const ConcurrencyLimiter = async (req, res, next) => {
         requestAmount,
         maxQueueSize,
         redisClient: redis,
+        // logger,
+        debug: true,
       });
     }
 
@@ -41,7 +43,7 @@ const ConcurrencyLimiter = async (req, res, next) => {
     return next();
   } catch (error) {
     await limiterInstance.free(requestId); // Check if this is needed because when a request finish the free method is called is called
-    console.log('Error', requestId, error.message);
+    logger.error('Error', requestId, error.message);
     if (error instanceof QueueMaxSizeError) {
       return res.status(429).send(error);
     }

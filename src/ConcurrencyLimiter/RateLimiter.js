@@ -33,18 +33,22 @@ class Limiter {
     pollingInterval = 1000, // Every second
     expirationTimeSetItems = 1000 * 60 * 10, // 10 Minutes
     expirationCheckInterval = 1000 * 60 * 5, // 5 Minutes
+    logger = console,
+    debug = false,
   }) {
     this.prefixKey = prefixKey;
     this.requestAmount = requestAmount;
     this.maxQueueSize = maxQueueSize;
     this.redisClient = redisClient;
-    this.localQueue = new Map();
+    this.localQueue = new Set(); // TODO: Test if a Set is better
     this.requestSetKey = `${prefixKey}:requests`;
     this.maxWaitingTimeInQueue = maxWaitingTimeInQueue;
     this.pollingInterval = pollingInterval;
     this.expirationTimeSetItems = expirationTimeSetItems;
     this.expirationCheckInterval = expirationCheckInterval;
     this.nextExpirationCall = Date.now() + expirationCheckInterval;
+    this.logger = logger;
+    this.debug = debug;
   }
 
   async handle(requestId) {
@@ -53,13 +57,17 @@ class Limiter {
 
     if (numberOfRequests > this.requestAmount) {
       if (this.localQueue.size < this.maxQueueSize) {
-        // if the set is full push to the queue and start a timeout
+        // If the set is full push to the queue and start a timeout
         this.pushToLocalQueue(requestId);
 
-        // Ask if the request can be handled and reject when timeOut
-        console.log('Queued', requestId, this.localQueue.size, this.localQueue);
-        // await timeOutPromise(3000, this.checkIfCanHandle(requestId));
+        this.logger.info(
+          'Queued',
+          requestId,
+          this.localQueue.size,
+          this.localQueue
+        );
 
+        // Ask if the request can be handled and reject when timeOut
         return this.checkIfCanHandle(requestId);
       } else {
         // if the queue is full return 429
@@ -67,12 +75,12 @@ class Limiter {
       }
     }
 
-    // if no limit reached then push to the set and resolve inmediatly
+    // If no limit reached then push to the set and resolve inmediatly
     return this.pushToSet(requestId);
   }
 
   free(requestId) {
-    console.log('Finished', requestId);
+    this.debug && this.logger.info('Finished', requestId);
     this.removeFromLocalQueue(requestId);
     return this.removeFromSet(requestId);
   }
@@ -82,7 +90,7 @@ class Limiter {
   }
 
   pushToSet(requestId) {
-    console.log('Added', requestId);
+    this.debug && this.logger.info('Added', requestId);
     return this.redisClient.zaddAsync(
       this.requestSetKey,
       Date.now() + this.expirationTimeSetItems,
@@ -95,7 +103,7 @@ class Limiter {
   }
 
   pushToLocalQueue(requestId) {
-    this.localQueue.set(requestId, true);
+    this.localQueue.add(requestId);
   }
 
   removeFromLocalQueue(requestId) {
@@ -115,7 +123,7 @@ class Limiter {
               return resolve(requestId);
             }
           } catch (error) {
-            console.log(error);
+            this.debug && console.log(error);
             clearInterval(intervalId);
             return reject(error);
           }
@@ -125,7 +133,7 @@ class Limiter {
       setTimeout(() => {
         clearInterval(intervalId);
         return reject(
-          new TimeOutError('Request timedout waiting in the queue')
+          new TimeOutError('Request timed out waiting in the queue')
         );
       }, this.maxWaitingTimeInQueue);
     });
@@ -140,7 +148,7 @@ class Limiter {
   }
 }
 
-const expireOldRequests = (redisClient, prefixKey) => {
+const expireOldRequests = function (redisClient, prefixKey) {
   return redisClient.evalAsync(
     expireOldRequestLuaScript,
     1,
@@ -153,4 +161,5 @@ module.exports = {
   TimeOutError,
   QueueMaxSizeError,
   expireOldRequests,
+  expireOldRequestLuaScript,
 };
