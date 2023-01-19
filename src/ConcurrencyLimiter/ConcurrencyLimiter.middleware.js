@@ -3,8 +3,8 @@ const logger = require('@condor-labs/logger');
 const { connect } = require('../libs/redis');
 const { Limiter, TimeOutError, QueueMaxSizeError } = require('./RateLimiter');
 
-const requestAmount = 5;
-const maxQueueSize = 20;
+const requestAmount = 10;
+const maxQueueSize = 100;
 let limiterInstance;
 
 const ConcurrencyLimiter = async (req, res, next) => {
@@ -23,7 +23,7 @@ const ConcurrencyLimiter = async (req, res, next) => {
         requestAmount,
         maxQueueSize,
         redisClient: redis,
-        // logger,
+        logger,
         debug: true,
       });
     }
@@ -34,7 +34,7 @@ const ConcurrencyLimiter = async (req, res, next) => {
       try {
         await limiterInstance.free(requestId);
       } catch (error) {
-        console.log(error);
+        logger.error(error);
       } finally {
         return next();
       }
@@ -43,7 +43,7 @@ const ConcurrencyLimiter = async (req, res, next) => {
     return next();
   } catch (error) {
     await limiterInstance.free(requestId); // Check if this is needed because when a request finish the free method is called is called
-    logger.error('Error', requestId, error.message);
+    logger.error('RateLimiter Error', requestId, error.message);
     if (error instanceof QueueMaxSizeError) {
       return res.status(429).send(error);
     }

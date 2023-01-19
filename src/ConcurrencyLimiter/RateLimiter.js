@@ -4,13 +4,6 @@ local current = redis.call('zcard', KEYS[1]) \
 return {removed, current} \
 `;
 
-/*
-  TODO:
-    - Set an expiration time to the items in the redis set using node-cache to control
-    the number of script execution per instance 5s TTL.
-    - Check if the check of the set can be made with a lua script
-*/
-
 class TimeOutError extends Error {
   constructor(message) {
     super(message);
@@ -23,16 +16,17 @@ class QueueMaxSizeError extends Error {
   }
 }
 
+const POLLING_INTERVAL = 1000;
+const EXPIRATION_CHECK_INTERVAL = 1000 * 5;
+
 class Limiter {
   constructor({
     prefixKey,
     requestAmount,
     maxQueueSize,
     redisClient,
-    maxWaitingTimeInQueue = 1000 * 60 * 3, // 3 Minutes
-    pollingInterval = 1000, // Every second
-    expirationTimeSetItems = 1000 * 60 * 10, // 10 Minutes
-    expirationCheckInterval = 1000 * 60 * 5, // 5 Minutes
+    maxProcessingTime = 1000 * 60 * 3, // 3 Minutes
+    expirationTimeSetItems = 1000 * 5, // 5 Seconds
     logger = console,
     debug = false,
   }) {
@@ -40,13 +34,11 @@ class Limiter {
     this.requestAmount = requestAmount;
     this.maxQueueSize = maxQueueSize;
     this.redisClient = redisClient;
-    this.localQueue = new Set(); // TODO: Test if a Set is better
+    this.localQueue = new Set();
     this.requestSetKey = `${prefixKey}:requests`;
-    this.maxWaitingTimeInQueue = maxWaitingTimeInQueue;
-    this.pollingInterval = pollingInterval;
-    this.expirationTimeSetItems = expirationTimeSetItems;
-    this.expirationCheckInterval = expirationCheckInterval;
-    this.nextExpirationCall = Date.now() + expirationCheckInterval;
+    this.maxProcessingTime = maxProcessingTime;
+    this.expirationTimeSetItems = expirationTimeSetItems + maxProcessingTime;
+    this.nextExpirationCall = Date.now() + EXPIRATION_CHECK_INTERVAL;
     this.logger = logger;
     this.debug = debug;
   }
@@ -60,18 +52,19 @@ class Limiter {
         // If the set is full push to the queue and start a timeout
         this.pushToLocalQueue(requestId);
 
-        this.logger.info(
-          'Queued',
-          requestId,
-          this.localQueue.size,
-          this.localQueue
-        );
+        this.debug &&
+          this.logger.info(
+            'RateLimiter Queued',
+            requestId,
+            this.localQueue.size,
+            this.localQueue
+          );
 
         // Ask if the request can be handled and reject when timeOut
         return this.checkIfCanHandle(requestId);
       } else {
         // if the queue is full return 429
-        throw new QueueMaxSizeError('Queue size reached');
+        throw new QueueMaxSizeError('QUEUE_SIZE_REACHED');
       }
     }
 
@@ -80,7 +73,7 @@ class Limiter {
   }
 
   free(requestId) {
-    this.debug && this.logger.info('Finished', requestId);
+    this.debug && this.logger.info('RateLimiter Finished', requestId);
     this.removeFromLocalQueue(requestId);
     return this.removeFromSet(requestId);
   }
@@ -90,7 +83,7 @@ class Limiter {
   }
 
   pushToSet(requestId) {
-    this.debug && this.logger.info('Added', requestId);
+    this.debug && this.logger.info('RateLimiter Added', requestId);
     return this.redisClient.zaddAsync(
       this.requestSetKey,
       Date.now() + this.expirationTimeSetItems,
@@ -128,20 +121,19 @@ class Limiter {
             return reject(error);
           }
         })();
-      }, this.pollingInterval);
+      }, POLLING_INTERVAL);
 
       setTimeout(() => {
         clearInterval(intervalId);
-        return reject(
-          new TimeOutError('Request timed out waiting in the queue')
-        );
-      }, this.maxWaitingTimeInQueue);
+        return reject(new TimeOutError('REQUEST_TIMED_OUT'));
+      }, this.maxProcessingTime);
     });
   }
 
   expireOldItemsInSet() {
     if (Date.now() >= this.nextExpirationCall) {
-      this.nextExpirationCall = Date.now() + this.expirationCheckInterval;
+      this.nextExpirationCall = Date.now() + EXPIRATION_CHECK_INTERVAL;
+
       return expireOldRequests(this.redisClient, `${this.prefixKey}:requests`);
     }
     return;
