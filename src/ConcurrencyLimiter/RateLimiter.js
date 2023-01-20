@@ -16,38 +16,37 @@ class QueueMaxSizeError extends Error {
   }
 }
 
-const POLLING_INTERVAL = 1000;
-const EXPIRATION_CHECK_INTERVAL = 1000 * 5;
+const POLLING_INTERVAL = 1000; // Every second
+const EXPIRATION_CHECK_INTERVAL = 1000 * 5; // Every 5 seconds
+const MAX_PROCESSING_TIME = 1000 * 60 * 3; // 3 Minutes
 
 class Limiter {
   constructor({
     prefixKey,
-    requestAmount,
+    maxConcurrentRequests,
     maxQueueSize,
     redisClient,
-    maxProcessingTime = 1000 * 60 * 3, // 3 Minutes
     expirationTimeSetItems = 1000 * 5, // 5 Seconds
     logger = console,
     debug = false,
   }) {
     this.prefixKey = prefixKey;
-    this.requestAmount = requestAmount;
+    this.maxConcurrentRequests = maxConcurrentRequests;
     this.maxQueueSize = maxQueueSize;
     this.redisClient = redisClient;
     this.localQueue = new Set();
     this.requestSetKey = `${prefixKey}:requests`;
-    this.maxProcessingTime = maxProcessingTime;
-    this.expirationTimeSetItems = expirationTimeSetItems + maxProcessingTime;
+    this.expirationTimeSetItems = expirationTimeSetItems + MAX_PROCESSING_TIME;
     this.nextExpirationCall = Date.now() + EXPIRATION_CHECK_INTERVAL;
     this.logger = logger;
     this.debug = debug;
   }
 
   async handle(requestId) {
-    await this.expireOldItemsInSet();
+    await this.evaluateExpireOldItemsInSet();
     const numberOfRequests = await this.getNumberOfRequestRunning();
 
-    if (numberOfRequests > this.requestAmount) {
+    if (numberOfRequests > this.maxConcurrentRequests) {
       if (this.localQueue.size < this.maxQueueSize) {
         // If the set is full push to the queue and start a timeout
         this.pushToLocalQueue(requestId);
@@ -109,7 +108,7 @@ class Limiter {
         (async () => {
           try {
             const numberOfRequests = await this.getNumberOfRequestRunning();
-            if (numberOfRequests < this.requestAmount) {
+            if (numberOfRequests < this.maxConcurrentRequests) {
               this.removeFromLocalQueue(requestId);
               await this.pushToSet(requestId);
               clearInterval(intervalId);
@@ -126,11 +125,11 @@ class Limiter {
       setTimeout(() => {
         clearInterval(intervalId);
         return reject(new TimeOutError('REQUEST_TIMED_OUT'));
-      }, this.maxProcessingTime);
+      }, MAX_PROCESSING_TIME);
     });
   }
 
-  expireOldItemsInSet() {
+  evaluateExpireOldItemsInSet() {
     if (Date.now() >= this.nextExpirationCall) {
       this.nextExpirationCall = Date.now() + EXPIRATION_CHECK_INTERVAL;
 

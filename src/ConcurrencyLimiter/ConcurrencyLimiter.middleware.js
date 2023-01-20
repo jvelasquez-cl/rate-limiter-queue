@@ -3,7 +3,7 @@ const logger = require('@condor-labs/logger');
 const { connect } = require('../libs/redis');
 const { Limiter, TimeOutError, QueueMaxSizeError } = require('./RateLimiter');
 
-const requestAmount = 10;
+const maxConcurrentRequests = 10;
 const maxQueueSize = 100;
 let limiterInstance;
 
@@ -20,7 +20,7 @@ const ConcurrencyLimiter = async (req, res, next) => {
     if (!limiterInstance) {
       limiterInstance = new Limiter({
         prefixKey,
-        requestAmount,
+        maxConcurrentRequests,
         maxQueueSize,
         redisClient: redis,
         logger,
